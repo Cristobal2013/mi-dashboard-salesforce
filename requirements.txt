@@ -2,3 +2,4 @@ simple-salesforce
 pandas
 streamlit
 plotly
+altair
