@@ -40,20 +40,22 @@ with st.sidebar.expander("Credenciales de Salesforce", expanded=True):
     )
     
     if domain_type == "Personalizado":
-        sf_domain = st.sidebar.text_input("Subdominio", value="sovos-compliance", help="Ej: sovos-compliance")
+        # Los dominios personalizados de Salesforce requieren el formato 'subdominio.my.salesforce.com'
+        sf_domain = st.sidebar.text_input("Subdominio", value="sovos-compliance.my", help="Ej: sovos-compliance.my")
     elif domain_type == "test":
         sf_domain = "test"
     else:
         sf_domain = "login"
 
-    # ID del reporte extraído de tu URL: 00O3u000006eXHyEAM
-    report_id = st.text_input("ID del Reporte", value="00O3u000006eXHyEAM")
+    # ID del reporte actualizado del nuevo link: 00OPr000002rd0TMAQ
+    report_id = st.text_input("ID del Reporte", value="00OPr000002rd0TMAQ")
 
 st.sidebar.divider()
 st.sidebar.info("""
 **Instrucciones para Sovos:**
-1. Mantén el subdominio en `sovos-compliance`.
-2. Asegúrate de usar tu Security Token actualizado.
+1. El subdominio predeterminado es `sovos-compliance.my`.
+2. El ID del reporte ya está actualizado según tu último enlace.
+3. Asegúrate de ingresar tu contraseña y token correctamente.
 """)
 
 @st.cache_resource(show_spinner=False)
@@ -62,7 +64,7 @@ def get_sf_connection(user, password, token, domain):
     if not all([user, password, token]):
         return None
     try:
-        # La librería añade automáticamente .my.salesforce.com si detecta un subdominio
+        # La librería añade automáticamente .salesforce.com al final del domain
         return Salesforce(
             username=user, 
             password=password, 
@@ -89,16 +91,17 @@ def parse_sf_report(report_results):
             rows_data.append(current_row)
         
         df = pd.DataFrame(rows_data, columns=columns)
+        # Intentamos convertir columnas a números para graficar
         for col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='ignore')
         return df
     except KeyError:
-        st.error("El formato del reporte no parece ser tabular. Asegúrate de que el reporte en Salesforce muestre 'Detalles'.")
+        st.error("El formato del reporte no parece ser tabular o no tiene filas de detalle.")
         return pd.DataFrame()
 
 # --- CUERPO PRINCIPAL ---
 st.title("🚀 Salesforce Insights Dashboard")
-st.caption(f"Conectado al dominio: {sf_domain}")
+st.caption(f"Conectando a: {sf_domain}.salesforce.com")
 
 if sf_user and sf_pass and sf_token:
     sf = get_sf_connection(sf_user, sf_pass, sf_token, sf_domain)
@@ -114,7 +117,7 @@ if sf_user and sf_pass and sf_token:
                     m1, m2, m3 = st.columns(3)
                     m1.metric("Registros Totales", f"{len(df):,}")
                     m2.metric("Columnas", len(df.columns))
-                    m3.metric("Org", "Sovos Compliance", delta="Active")
+                    m3.metric("Entorno", domain_type, delta="Activo")
 
                     st.divider()
 
@@ -140,11 +143,11 @@ if sf_user and sf_pass and sf_token:
                         csv = df.to_csv(index=False).encode('utf-8')
                         st.download_button("📥 Descargar Tabla (CSV)", csv, "reporte_sovos.csv", "text/csv")
                 else:
-                    st.warning("El reporte no devolvió datos. Verifica que tenga registros en Salesforce.")
+                    st.warning("El reporte no devolvió datos. Asegúrate de que el reporte tenga registros visibles en Salesforce.")
 
             except Exception as e:
                 st.error(f"Error al procesar el reporte: {e}")
     else:
-        st.error("Error de autenticación. Verifica que el subdominio 'sovos-compliance' sea correcto y tus credenciales coincidan.")
+        st.error("Error de autenticación. Verifica credenciales y subdominio.")
 else:
     st.info("👈 Por favor, ingresa tus credenciales en la barra lateral para visualizar el dashboard.")
