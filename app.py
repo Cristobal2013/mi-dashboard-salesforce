@@ -10,7 +10,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Estilo personalizado
+# Estilo personalizado para una apariencia profesional
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -31,22 +31,30 @@ with st.sidebar.expander("Credenciales de Salesforce", expanded=True):
     sf_pass = st.text_input("Contraseña", type="password")
     sf_token = st.text_input("Security Token", type="password")
     
-    # NUEVO: Selección de dominio para evitar INVALID_SSO_GATEWAY_URL
+    # Configuración de Dominio para Sovos Compliance
     domain_type = st.sidebar.selectbox(
         "Entorno / Dominio",
-        ["login", "test", "Personalizado"],
-        help="Usa 'login' para Producción, 'test' para Sandbox, o ingresa tu My Domain."
+        ["Personalizado", "login", "test"],
+        index=0,
+        help="Para Sovos, usa 'Personalizado' con el subdominio de la empresa."
     )
     
-    sf_domain = "login"
-    if domain_type == "test":
+    if domain_type == "Personalizado":
+        sf_domain = st.sidebar.text_input("Subdominio", value="sovos-compliance", help="Ej: sovos-compliance")
+    elif domain_type == "test":
         sf_domain = "test"
-    elif domain_type == "Personalizado":
-        sf_domain = st.sidebar.text_input("Mi Dominio (ej: miempresa.my)", placeholder="miempresa.my")
+    else:
+        sf_domain = "login"
 
-    report_id = st.text_input("ID del Reporte", value="00OPr000002rd0TMAQ")
+    # ID del reporte extraído de tu URL: 00O3u000006eXHyEAM
+    report_id = st.text_input("ID del Reporte", value="00O3u000006eXHyEAM")
 
 st.sidebar.divider()
+st.sidebar.info("""
+**Instrucciones para Sovos:**
+1. Mantén el subdominio en `sovos-compliance`.
+2. Asegúrate de usar tu Security Token actualizado.
+""")
 
 @st.cache_resource(show_spinner=False)
 def get_sf_connection(user, password, token, domain):
@@ -54,7 +62,7 @@ def get_sf_connection(user, password, token, domain):
     if not all([user, password, token]):
         return None
     try:
-        # Añadimos el parámetro 'domain' para corregir errores de SSO/Sandbox
+        # La librería añade automáticamente .my.salesforce.com si detecta un subdominio
         return Salesforce(
             username=user, 
             password=password, 
@@ -67,61 +75,76 @@ def get_sf_connection(user, password, token, domain):
 
 def parse_sf_report(report_results):
     """Limpia el JSON complejo de Salesforce y lo convierte en DataFrame."""
-    columns = []
-    col_info = report_results['reportExtendedMetadata']['detailColumnInfo']
-    for col_key in col_info:
-        columns.append(col_info[col_key]['label'])
-    
-    rows_data = []
-    rows = report_results['factMap']['T!T']['rows']
-    for row in rows:
-        current_row = [cell.get('value') if cell.get('value') is not None else cell.get('label') for cell in row['dataCells']]
-        rows_data.append(current_row)
-    
-    df = pd.DataFrame(rows_data, columns=columns)
-    for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='ignore')
-    return df
+    try:
+        columns = []
+        col_info = report_results['reportExtendedMetadata']['detailColumnInfo']
+        for col_key in col_info:
+            columns.append(col_info[col_key]['label'])
+        
+        rows_data = []
+        # T!T es la clave para reportes tabulares (listas)
+        rows = report_results['factMap']['T!T']['rows']
+        for row in rows:
+            current_row = [cell.get('value') if cell.get('value') is not None else cell.get('label') for cell in row['dataCells']]
+            rows_data.append(current_row)
+        
+        df = pd.DataFrame(rows_data, columns=columns)
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='ignore')
+        return df
+    except KeyError:
+        st.error("El formato del reporte no parece ser tabular. Asegúrate de que el reporte en Salesforce muestre 'Detalles'.")
+        return pd.DataFrame()
 
 # --- CUERPO PRINCIPAL ---
 st.title("🚀 Salesforce Insights Dashboard")
+st.caption(f"Conectado al dominio: {sf_domain}")
 
 if sf_user and sf_pass and sf_token:
     sf = get_sf_connection(sf_user, sf_pass, sf_token, sf_domain)
     
     if sf:
-        with st.spinner('⏳ Sincronizando con Salesforce...'):
+        with st.spinner('⏳ Sincronizando datos de Sovos...'):
             try:
+                # Llamada a la API de Analytics para obtener la data del reporte
                 report_data = sf.restful(f'analytics/reports/{report_id}')
                 df = parse_sf_report(report_data)
                 
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Total Registros", f"{len(df):,}")
-                m2.metric("Columnas Activas", len(df.columns))
-                m3.metric("Estado", "Conectado", delta=domain_type)
+                if not df.empty:
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Registros Totales", f"{len(df):,}")
+                    m2.metric("Columnas", len(df.columns))
+                    m3.metric("Org", "Sovos Compliance", delta="Active")
 
-                st.divider()
+                    st.divider()
 
-                tab1, tab2 = st.tabs(["📈 Análisis Visual", "📋 Datos Crudos"])
+                    tab1, tab2 = st.tabs(["📈 Análisis Visual", "📋 Explorador de Datos"])
 
-                with tab1:
-                    col_left, col_right = st.columns([1, 2])
-                    with col_left:
-                        eje_x = st.selectbox("Eje X", df.columns, index=0)
-                        eje_y = st.selectbox("Eje Y", df.columns, index=min(1, len(df.columns)-1))
-                        tipo = st.radio("Tipo", ["Barras", "Líneas"])
-                    
-                    with col_right:
-                        fig = px.bar(df, x=eje_x, y=eje_y, template="plotly_white") if tipo == "Barras" else px.line(df, x=eje_x, y=eje_y, template="plotly_white")
-                        st.plotly_chart(fig, use_container_width=True)
+                    with tab1:
+                        col_left, col_right = st.columns([1, 2])
+                        with col_left:
+                            st.subheader("Configuración")
+                            eje_x = st.selectbox("Eje X (Categoría)", df.columns, index=0)
+                            eje_y = st.selectbox("Eje Y (Valor)", df.columns, index=min(1, len(df.columns)-1))
+                            tipo = st.radio("Gráfico", ["Barras", "Líneas"])
+                        
+                        with col_right:
+                            if tipo == "Barras":
+                                fig = px.bar(df, x=eje_x, y=eje_y, template="plotly_white", color_discrete_sequence=['#00a1e0'])
+                            else:
+                                fig = px.line(df, x=eje_x, y=eje_y, template="plotly_white")
+                            st.plotly_chart(fig, use_container_width=True)
 
-                with tab2:
-                    st.dataframe(df, use_container_width=True)
-                    st.download_button("📥 Descargar CSV", df.to_csv(index=False), "data.csv")
+                    with tab2:
+                        st.dataframe(df, use_container_width=True, height=500)
+                        csv = df.to_csv(index=False).encode('utf-8')
+                        st.download_button("📥 Descargar Tabla (CSV)", csv, "reporte_sovos.csv", "text/csv")
+                else:
+                    st.warning("El reporte no devolvió datos. Verifica que tenga registros en Salesforce.")
 
             except Exception as e:
                 st.error(f"Error al procesar el reporte: {e}")
     else:
-        st.error("Error de autenticación. Revisa el Entorno (Producción vs Sandbox) y tus credenciales.")
+        st.error("Error de autenticación. Verifica que el subdominio 'sovos-compliance' sea correcto y tus credenciales coincidan.")
 else:
-    st.info("👈 Ingresa tus credenciales y selecciona el entorno correcto en la barra lateral.")
+    st.info("👈 Por favor, ingresa tus credenciales en la barra lateral para visualizar el dashboard.")
